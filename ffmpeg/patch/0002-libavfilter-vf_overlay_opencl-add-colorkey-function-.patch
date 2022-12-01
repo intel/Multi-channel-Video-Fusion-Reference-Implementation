@@ -1,0 +1,251 @@
+From 2c5949f3c3b0f4ff5535a25530f81530896244cf Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Fri, 21 Jan 2022 10:11:01 +0800
+Subject: [PATCH 2/2] libavfilter/vf_overlay_opencl: add colorkey function to
+ overlay
+
+Draft: add colorkey function to overlay, so that it can input/output
+nv12 without pix_fmt transfermation.
+
+Signed-off-by: Wenbin Chen <wenbin.chen@intel.com>
+---
+ libavfilter/opencl/overlay.cl   |  45 ++++++++++++
+ libavfilter/vf_overlay_opencl.c | 119 ++++++++++++++++++++++++++------
+ 2 files changed, 143 insertions(+), 21 deletions(-)
+
+diff --git a/libavfilter/opencl/overlay.cl b/libavfilter/opencl/overlay.cl
+index 8c783d0edc..c8824afa27 100644
+--- a/libavfilter/opencl/overlay.cl
++++ b/libavfilter/opencl/overlay.cl
+@@ -102,3 +102,48 @@ __kernel void overlay_external_alpha(__write_only image2d_t dst,
+         write_imagef(dst, loc, val);
+     }
+ }
++
++__kernel void overlay_colorkey_nv12(__write_only image2d_t dst_y,
++                                    __write_only image2d_t dst_uv,
++                               __read_only  image2d_t main_y,
++                               __read_only  image2d_t main_uv,
++                               __read_only  image2d_t overlay_y,
++                               __read_only  image2d_t overlay_uv,
++                               int x_position,
++                               int y_position,
++                               float4 colorkey_rgba,
++                               float similarity,
++                               float blend)
++{
++    const sampler_t sampler = (CLK_NORMALIZED_COORDS_FALSE |
++                               CLK_FILTER_NEAREST);
++
++    int2 overlay_size = get_image_dim(overlay_y);
++    int2 loc = (int2)(get_global_id(0), get_global_id(1));
++
++    if (loc.x <  x_position ||
++        loc.y <  y_position ||
++        loc.x >= overlay_size.x + x_position ||
++        loc.y >= overlay_size.y + y_position) {
++        float4 val = read_imagef(main_y, sampler, loc);
++        write_imagef(dst_y, loc, val);
++        if (loc.x % 2 == 0 && loc.y % 2 == 0) {
++            val = read_imagef(main_uv, sampler, loc / 2);
++            write_imagef(dst_uv, loc / 2, val);
++        }
++    } else {
++        int2 loc_overlay  = (int2)(x_position, y_position);
++        float4 in_main_y    = read_imagef(main_y,    sampler, loc);
++        float4 in_overlay_y = read_imagef(overlay_y, sampler, loc - loc_overlay);
++        float4 in_main_uv    = read_imagef(main_uv,    sampler, loc / 2);
++        float4 in_overlay_uv = read_imagef(overlay_uv, sampler, (loc - loc_overlay) / 2);
++        float  diff       = distance((float3)(in_overlay_y.x, in_overlay_uv.xy), colorkey_rgba.xyz);
++        float  alpha      = clamp((diff - similarity) / blend, 0.0f, 1.0f);
++        float4 val        = in_overlay_y * alpha + in_main_y * (1.0f - alpha);
++        write_imagef(dst_y, loc, val);
++        if (loc.x % 2 == 0 && loc.y % 2 == 0) {
++            val        = in_overlay_uv * alpha + in_main_uv * (1.0f - alpha);
++            write_imagef(dst_uv, loc / 2, val);
++        }
++    }
++}
+diff --git a/libavfilter/vf_overlay_opencl.c b/libavfilter/vf_overlay_opencl.c
+index 1e3ad903e1..1fc48202b2 100644
+--- a/libavfilter/vf_overlay_opencl.c
++++ b/libavfilter/vf_overlay_opencl.c
+@@ -43,6 +43,19 @@ typedef struct OverlayOpenCLContext {
+ 
+     int              x_position;
+     int              y_position;
++
++    int colorkey;
++    // The color we are supposed to replace with transparency
++    uint8_t colorkey_rgba[4];
++    // Stored as a normalized float for passing to the OpenCL kernel
++    cl_float4 colorkey_rgba_float;
++    // Similarity percentage compared to `colorkey_rgba`, ranging from `0.01` to `1.0`
++    // where `0.01` matches only the key color and `1.0` matches all colors
++    float similarity;
++    // Blending percentage where `0.0` results in fully transparent pixels, `1.0` results
++    // in fully opaque pixels, and numbers in between result in transparency that varies
++    // based on the similarity to the key color
++    float blend;
+ } OverlayOpenCLContext;
+ 
+ static int overlay_opencl_load(AVFilterContext *avctx,
+@@ -78,8 +91,12 @@ static int overlay_opencl_load(AVFilterContext *avctx,
+                ctx->x_position, ctx->y_position,
+                ctx->x_subsample, ctx->y_subsample);
+     }
+-
+-    if (main_planes == overlay_planes) {
++    if (ctx->colorkey && main_format == AV_PIX_FMT_NV12) {
++        kernel = "overlay_colorkey_nv12";
++        for (int i = 0; i < 4; ++i) {
++            ctx->colorkey_rgba_float.s[i] = (float)ctx->colorkey_rgba[i] / 255.0;
++        }
++    } else if (main_planes == overlay_planes) {
+         if (main_desc->nb_components == overlay_desc->nb_components)
+             kernel = "overlay_no_alpha";
+         else
+@@ -154,47 +171,53 @@ static int overlay_opencl_blend(FFFrameSync *fs)
+         goto fail;
+     }
+ 
+-    for (plane = 0; plane < ctx->nb_planes; plane++) {
++    if (ctx->colorkey &&
++       ((AVHWFramesContext*)input_main->hw_frames_ctx->data)->sw_format == AV_PIX_FMT_NV12) {
+         kernel_arg = 0;
+ 
+-        mem = (cl_mem)output->data[plane];
++        mem = (cl_mem)output->data[0];
+         CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
+         kernel_arg++;
+ 
+-        mem = (cl_mem)input_main->data[plane];
++        mem = (cl_mem)output->data[1];
+         CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
+         kernel_arg++;
+ 
+-        mem = (cl_mem)input_overlay->data[plane];
++        mem = (cl_mem)input_main->data[0];
+         CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
+         kernel_arg++;
+ 
+-        if (ctx->alpha_separate) {
+-            mem = (cl_mem)input_overlay->data[ctx->nb_planes];
+-            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
+-            kernel_arg++;
+-        }
++        mem = (cl_mem)input_main->data[1];
++        CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++        kernel_arg++;
++
++        mem = (cl_mem)input_overlay->data[0];
++        CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++        kernel_arg++;
++
++        mem = (cl_mem)input_overlay->data[1];
++        CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++        kernel_arg++;
+ 
+-        x = ctx->x_position / (plane == 0 ? 1 : ctx->x_subsample);
+-        y = ctx->y_position / (plane == 0 ? 1 : ctx->y_subsample);
++        x = ctx->x_position;
++        y = ctx->y_position;
+ 
+         CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &x);
+         kernel_arg++;
+         CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &y);
+         kernel_arg++;
+ 
+-        if (ctx->alpha_separate) {
+-            cl_int alpha_adj_x = plane == 0 ? 1 : ctx->x_subsample;
+-            cl_int alpha_adj_y = plane == 0 ? 1 : ctx->y_subsample;
+-
+-            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &alpha_adj_x);
+-            kernel_arg++;
+-            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &alpha_adj_y);
++        CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_float4, &ctx->colorkey_rgba_float);
++        kernel_arg++;
++        CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, float, &ctx->similarity);
++        kernel_arg++;
++        if (ctx->blend > 0.0001) {
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, float, &ctx->blend);
+             kernel_arg++;
+         }
+ 
+         err = ff_opencl_filter_work_size_from_image(avctx, global_work,
+-                                                    output, plane, 0);
++                                                    output, 0, 0);
+         if (err < 0)
+             goto fail;
+ 
+@@ -202,6 +225,56 @@ static int overlay_opencl_blend(FFFrameSync *fs)
+                                      global_work, NULL, 0, NULL, NULL);
+         CL_FAIL_ON_ERROR(AVERROR(EIO), "Failed to enqueue overlay kernel "
+                          "for plane %d: %d.\n", plane, cle);
++    } else {
++        for (plane = 0; plane < ctx->nb_planes; plane++) {
++            kernel_arg = 0;
++
++            mem = (cl_mem)output->data[plane];
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++            kernel_arg++;
++
++            mem = (cl_mem)input_main->data[plane];
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++            kernel_arg++;
++
++            mem = (cl_mem)input_overlay->data[plane];
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++            kernel_arg++;
++
++            if (ctx->alpha_separate) {
++                mem = (cl_mem)input_overlay->data[ctx->nb_planes];
++                CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_mem, &mem);
++                kernel_arg++;
++            }
++
++            x = ctx->x_position / (plane == 0 ? 1 : ctx->x_subsample);
++            y = ctx->y_position / (plane == 0 ? 1 : ctx->y_subsample);
++
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &x);
++            kernel_arg++;
++            CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &y);
++            kernel_arg++;
++
++            if (ctx->alpha_separate) {
++                cl_int alpha_adj_x = plane == 0 ? 1 : ctx->x_subsample;
++                cl_int alpha_adj_y = plane == 0 ? 1 : ctx->y_subsample;
++
++                CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &alpha_adj_x);
++                kernel_arg++;
++                CL_SET_KERNEL_ARG(ctx->kernel, kernel_arg, cl_int, &alpha_adj_y);
++                kernel_arg++;
++            }
++
++            err = ff_opencl_filter_work_size_from_image(avctx, global_work,
++                                                        output, plane, 0);
++            if (err < 0)
++                goto fail;
++
++            cle = clEnqueueNDRangeKernel(ctx->command_queue, ctx->kernel, 2, NULL,
++                                            global_work, NULL, 0, NULL, NULL);
++            CL_FAIL_ON_ERROR(AVERROR(EIO), "Failed to enqueue overlay kernel "
++                                "for plane %d: %d.\n", plane, cle);
++        }
+     }
+ 
+     cle = clFinish(ctx->command_queue);
+@@ -284,6 +357,10 @@ static const AVOption overlay_opencl_options[] = {
+       OFFSET(x_position), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, .flags = FLAGS },
+     { "y", "Overlay y position",
+       OFFSET(y_position), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, INT_MAX, .flags = FLAGS },
++    { "colorkey", "enable colorkey", OFFSET(colorkey), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, FLAGS },
++    { "color", "set the colorkey key color", OFFSET(colorkey_rgba), AV_OPT_TYPE_COLOR, { .str = "black" }, 0, 0, FLAGS },
++    { "similarity", "set the colorkey similarity value", OFFSET(similarity), AV_OPT_TYPE_FLOAT, { .dbl = 0.01 }, 0.01, 1.0, FLAGS },
++    { "blend", "set the colorkey key blend value", OFFSET(blend), AV_OPT_TYPE_FLOAT, { .dbl = 0.0 }, 0.0, 1.0, FLAGS },
+     { NULL },
+ };
+ 
+-- 
+2.25.1
+

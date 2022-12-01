@@ -1,0 +1,41 @@
+From 8002c08193581196d6d3450d70a2ce3f30fa6195 Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Thu, 14 Apr 2022 08:47:02 +0000
+Subject: [PATCH] libavutil/hwcontext_opencl: Fix hwmap error when map from
+ D3D11_BIND_RENDER_TARGET
+
+---
+ libavutil/hwcontext_opencl.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/libavutil/hwcontext_opencl.c b/libavutil/hwcontext_opencl.c
+index 15a209a473..9dce50ec76 100644
+--- a/libavutil/hwcontext_opencl.c
++++ b/libavutil/hwcontext_opencl.c
+@@ -2528,12 +2528,22 @@ static int opencl_map_from_d3d11(AVHWFramesContext *dst_fc, AVFrame *dst,
+ {
+     OpenCLDeviceContext  *device_priv = dst_fc->device_ctx->internal->priv;
+     OpenCLFramesContext  *frames_priv = dst_fc->internal->priv;
++    AVHWFramesContext *src_fc = (AVHWFramesContext *)src->hw_frames_ctx->data;
++    AVD3D11VAFramesContext *src_hwctx = src_fc->hwctx;
+     AVOpenCLFrameDescriptor *desc;
+     cl_event event;
+     cl_int cle;
+     int err, index, i;
+ 
+-    index = (intptr_t)src->data[1];
++    if(src_hwctx->BindFlags & D3D11_BIND_RENDER_TARGET) {
++        for (index = 0; index <= frames_priv->nb_mapped_frames; index++) {
++            if (src->data[0] == (uint8_t *)src_hwctx->texture_infos[index].texture)
++                break;
++        }
++    }
++    else
++        index = (intptr_t)src->data[1];
++
+     if (index >= frames_priv->nb_mapped_frames) {
+         av_log(dst_fc, AV_LOG_ERROR, "Texture array index out of range for "
+                "mapping: %d >= %d.\n", index, frames_priv->nb_mapped_frames);
+-- 
+2.35.1
+

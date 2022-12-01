@@ -1,0 +1,29 @@
+From bd9b380694c06c3c806787510fd0e5c5e01edcc8 Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Wed, 13 Apr 2022 07:20:04 +0000
+Subject: [PATCH] libavutil/hwcontext_opencl: fix issue when derive d3d11va to
+ opencl
+
+fix Issue when derive d3d11va to opencl
+
+Signed-off-by: Wenbin Chen <wenbin.chen@intel.com>
+---
+ libavutil/hwcontext_opencl.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libavutil/hwcontext_opencl.c b/libavutil/hwcontext_opencl.c
+index 55e4e566fa..15a209a473 100644
+--- a/libavutil/hwcontext_opencl.c
++++ b/libavutil/hwcontext_opencl.c
+@@ -2625,7 +2625,7 @@ static int opencl_frames_derive_from_d3d11(AVHWFramesContext *dst_fc,
+ 
+             desc->planes[p] =
+                 device_priv->clCreateFromD3D11Texture2DKHR(
+-                    dst_dev->context, cl_flags, src_hwctx->texture,
++                    dst_dev->context, cl_flags, src_hwctx->texture_infos[i].texture,
+                     subresource, &cle);
+             if (!desc->planes[p]) {
+                 av_log(dst_fc, AV_LOG_ERROR, "Failed to create CL "
+-- 
+2.35.1
+

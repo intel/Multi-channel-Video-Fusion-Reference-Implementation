@@ -1,0 +1,115 @@
+From 882db90d1ed5cd3e2a6e35f0ee427692787d046c Mon Sep 17 00:00:00 2001
+From: Tong Wu <tong1.wu@intel.com>
+Date: Thu, 24 Feb 2022 10:51:15 +0800
+Subject: [PATCH 3/3] avutil/hwcontext_qsv: fix D3D11VA<->qsv hwmap errors
+
+For hwmap between qsv and d3d11va, The mfxHDLPair information should be
+put into texture_infos when deriving from qsv context. Moreover, when
+uploading from rawvideo, the ways that the textures are created are
+different, bindflag assertions are needed to make sure the right
+textures are derived during the process. Now after this fix,
+d3d_dec->qsv_vpp->qsv_enc, d3d_dec->qsv_vpp->qsv_download->yuv,
+yuv->d3d_upload->qsv_vpp->qsv->download->yuv,
+qsv_dec->qsv_vpp->d3d_download->yuv can all work properly.
+
+For d3d_dec->qsv_vpp->qsv_enc, one sample command line:
+ffmpeg.exe -hwaccel qsv -c:v h264_qsv -i input.264
+-vf "hwmap=derive_device=d3d11va,format=d3d11,hwmap=derive_device=qsv,format=qsv"
+-c:v h264_qsv -y ./output.264
+
+Signed-off-by: Tong Wu <tong1.wu@intel.com>
+---
+ libavutil/hwcontext_qsv.c | 44 ++++++++++++++++++++++++++++++++-------
+ 1 file changed, 36 insertions(+), 8 deletions(-)
+
+diff --git a/libavutil/hwcontext_qsv.c b/libavutil/hwcontext_qsv.c
+index 95f8071abe..03b97d8ec7 100644
+--- a/libavutil/hwcontext_qsv.c
++++ b/libavutil/hwcontext_qsv.c
+@@ -806,9 +806,19 @@ static int qsv_frames_derive_from(AVHWFramesContext *dst_ctx,
+ #if CONFIG_D3D11VA
+     case AV_HWDEVICE_TYPE_D3D11VA:
+         {
++            dst_ctx->initial_pool_size = src_ctx->initial_pool_size;
+             AVD3D11VAFramesContext *dst_hwctx = dst_ctx->hwctx;
+-            mfxHDLPair *pair = (mfxHDLPair*)src_hwctx->surfaces[i].Data.MemId;
+-            dst_hwctx->texture = (ID3D11Texture2D*)pair->first;
++            dst_hwctx->texture_infos = av_calloc(src_hwctx->nb_surfaces,
++                                            sizeof(*dst_hwctx->texture_infos));
++            for (i = 0; i < src_hwctx->nb_surfaces; i++) {
++                mfxHDLPair* pair = (mfxHDLPair*)src_hwctx->surfaces[i].Data.MemId;
++                dst_hwctx->texture_infos[i].texture = (ID3D11Texture2D*)pair->first;
++                if (dst_hwctx->BindFlags & D3D11_BIND_RENDER_TARGET) {
++                    dst_hwctx->texture_infos[i].index = 0;
++                } else {
++                    dst_hwctx->texture_infos[i].index = (intptr_t)pair->second;
++                }
++            }
+             if (src_hwctx->frame_type & MFX_MEMTYPE_SHARED_RESOURCE)
+                 dst_hwctx->MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+             dst_hwctx->BindFlags = qsv_get_d3d11va_bind_flags(src_hwctx->frame_type);
+@@ -900,9 +910,16 @@ static int qsv_map_from(AVHWFramesContext *ctx,
+         dst->height  = src->height;
+ 
+        if (child_frames_ctx->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
++#if CONFIG_D3D11VA
++           AVD3D11VAFramesContext* child_frames_hwctx = child_frames_ctx->hwctx;
+             mfxHDLPair *pair = (mfxHDLPair*)surf->Data.MemId;
+             dst->data[0] = pair->first;
+-            dst->data[1] = pair->second;
++            if (child_frames_hwctx->BindFlags & D3D11_BIND_RENDER_TARGET) {
++                dst->data[1] = 0;
++            } else {
++                dst->data[1] = pair->second;
++            }
++#endif
+         } else {
+             dst->data[3] = child_data;
+         }
+@@ -930,9 +947,16 @@ static int qsv_map_from(AVHWFramesContext *ctx,
+     dummy->height        = src->height;
+ 
+     if (child_frames_ctx->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
++#if CONFIG_D3D11VA
++        AVD3D11VAFramesContext* child_frames_hwctx = child_frames_ctx->hwctx;
+         mfxHDLPair *pair = (mfxHDLPair*)surf->Data.MemId;
+         dummy->data[0] = pair->first;
+-        dummy->data[1] = pair->second;
++        if (child_frames_hwctx->BindFlags & D3D11_BIND_RENDER_TARGET) {
++            dst->data[1] = 0;
++        } else {
++            dst->data[1] = pair->second;
++        }
++#endif
+     } else {
+         dummy->data[3] = child_data;
+     }
+@@ -1287,6 +1311,7 @@ static int qsv_frames_derive_to(AVHWFramesContext *dst_ctx,
+         return AVERROR(ENOSYS);
+     }
+ 
++    s->child_frames_ref = av_buffer_ref(dst_ctx->internal->source_frames);
+     dst_hwctx->surfaces = s->surfaces_internal;
+ 
+     return 0;
+@@ -1314,10 +1339,13 @@ static int qsv_map_to(AVHWFramesContext *dst_ctx,
+         case AV_PIX_FMT_D3D11:
+         {
+             mfxHDLPair *pair = (mfxHDLPair*)hwctx->surfaces[i].Data.MemId;
+-            if (pair->first == src->data[0]
+-                && pair->second == src->data[1]) {
+-                index = i;
+-                break;
++            if (pair->first == src->data[0]) {
++                if (hwctx->frame_type & MFX_MEMTYPE_VIDEO_MEMORY_DECODER_TARGET
++                    && pair->second == src->data[1]
++                    || hwctx->frame_type & MFX_MEMTYPE_VIDEO_MEMORY_PROCESSOR_TARGET) {
++                    index = i;
++                    break;
++                }
+             }
+         }
+ #endif
+-- 
+2.32.0
+

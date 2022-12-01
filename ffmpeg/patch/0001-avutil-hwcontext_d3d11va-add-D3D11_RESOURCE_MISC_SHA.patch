@@ -1,0 +1,35 @@
+From c7b11766d06048255ea8075214429f4a9086221d Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Tue, 19 Apr 2022 12:04:04 +0000
+Subject: [PATCH] avutil/hwcontext_d3d11va: add D3D11_RESOURCE_MISC_SHARED flag
+
+Signed-off-by: Tong Wu <tong1.wu@intel.com>
+---
+ libavutil/hwcontext_d3d11va.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libavutil/hwcontext_d3d11va.c b/libavutil/hwcontext_d3d11va.c
+index eeb13da3eb..eb5d8a37fd 100644
+--- a/libavutil/hwcontext_d3d11va.c
++++ b/libavutil/hwcontext_d3d11va.c
+@@ -207,7 +207,7 @@ static AVBufferRef *d3d11va_alloc_single(AVHWFramesContext *ctx)
+         .ArraySize  = 1,
+         .Usage      = D3D11_USAGE_DEFAULT,
+         .BindFlags  = hwctx->BindFlags,
+-        .MiscFlags  = hwctx->MiscFlags,
++        .MiscFlags  = hwctx->MiscFlags | D3D11_RESOURCE_MISC_SHARED,
+     };
+ 
+     hr = ID3D11Device_CreateTexture2D(device_hwctx->device, &texDesc, NULL, &tex);
+@@ -276,7 +276,7 @@ static int d3d11va_frames_init(AVHWFramesContext *ctx)
+         .ArraySize  = ctx->initial_pool_size,
+         .Usage      = D3D11_USAGE_DEFAULT,
+         .BindFlags  = hwctx->BindFlags,
+-        .MiscFlags  = hwctx->MiscFlags,
++        .MiscFlags  = hwctx->MiscFlags | D3D11_RESOURCE_MISC_SHARED,
+     };
+ 
+     if (hwctx->texture) {
+-- 
+2.35.1
+

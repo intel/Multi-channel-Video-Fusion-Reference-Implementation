@@ -1,0 +1,24 @@
+From b5604db67b6798ff33a96a9a51cb263be81cb807 Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Wed, 6 Apr 2022 06:00:27 +0000
+Subject: [PATCH] asign initial_pool_size
+
+---
+ libavutil/hwcontext_qsv.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/libavutil/hwcontext_qsv.c b/libavutil/hwcontext_qsv.c
+index 6892693ca1..d7c67e7ddf 100644
+--- a/libavutil/hwcontext_qsv.c
++++ b/libavutil/hwcontext_qsv.c
+@@ -1167,6 +1167,7 @@ static int qsv_frames_derive_from(AVHWFramesContext *dst_ctx,
+     case AV_HWDEVICE_TYPE_DXVA2:
+         {
+             AVDXVA2FramesContext *dst_hwctx = dst_ctx->hwctx;
++            dst_ctx->initial_pool_size = src_ctx->initial_pool_size;
+             dst_hwctx->surfaces = av_calloc(src_hwctx->nb_surfaces,
+                                             sizeof(*dst_hwctx->surfaces));
+             if (!dst_hwctx->surfaces)
+-- 
+2.35.1
+

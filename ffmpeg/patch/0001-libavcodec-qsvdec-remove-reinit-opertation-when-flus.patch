@@ -1,0 +1,27 @@
+From 2219a8f00a7bdbd09df5427693629a980015c175 Mon Sep 17 00:00:00 2001
+From: Wenbin Chen <wenbin.chen@intel.com>
+Date: Thu, 19 May 2022 17:16:34 +0800
+Subject: [PATCH] libavcodec/qsvdec: remove reinit opertation when flush
+ decoder
+
+---
+ libavcodec/qsvdec.c | 3 ---
+ 1 file changed, 3 deletions(-)
+
+diff --git a/libavcodec/qsvdec.c b/libavcodec/qsvdec.c
+index 5fc5bed4c8..8b4f428301 100644
+--- a/libavcodec/qsvdec.c
++++ b/libavcodec/qsvdec.c
+@@ -989,9 +989,6 @@ static void qsv_decode_flush(AVCodecContext *avctx)
+     QSVDecContext *s = avctx->priv_data;
+ 
+     qsv_clear_buffers(s);
+-
+-    s->qsv.orig_pix_fmt = AV_PIX_FMT_NONE;
+-    s->qsv.initialized = 0;
+ }
+ 
+ #define OFFSET(x) offsetof(QSVDecContext, x)
+-- 
+2.32.0
+
