@@ -61,8 +61,8 @@ https://sourceforge.net/projects/monaserver/files/MonaServer/MonaServer_Win64.zi
 a.	Go to the installation directly, and "Run as Administrator". Make sure all the servers can be started correctly.
 ![image](https://user-images.githubusercontent.com/43125192/187343177-869bb413-faa5-4deb-aaba-0fecc6e65f05.png)
 
-### 2.0	Application Scenarios
-##2.1	Video Mode
+## Application Scenarios
+### 	Video Mode
 1.	1 foreground green screen video mp4 + 1 background mp4 video
 APP accelerates foreground green screen video with OpenCL color key, and overlay with background mp4 
 2.	1 foreground video + 1 background green screen video + 1 Roll Ad Video + 1 PNG ad APP accelerate foreground green screen video and roll- ad green screen video with OpenCL color key, and overlay with background mp4, finally overlay PNG file to combined videos
@@ -72,7 +72,7 @@ b.	Or streaming out with (streaming)
 Before streaming, set up the MonaServer. In this demo, we used the local machine as streaming server for in and out stream. rtmp://127.0.0.1:1935/live address is used for playing the streaming video. 
 Click Stream button and Open rtmp://127.0.0.1:1935/live directly to view the streaming stream
 
-##2.2	Camera Mode
+###	Camera Mode
 Replacing the second stream with Intel Virtual Camera solution, which outputs a live camera stream with green screen background. This camera stream will be color keyed with opencl and overlay as in video mode
 The same pipeline as video mode will be used for both
 1.	1 foreground Camera input + 1 background mp4 video
