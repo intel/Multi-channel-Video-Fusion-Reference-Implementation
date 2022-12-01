@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>images/bg.png</file>
+        <file>images/design.jpg</file>
+        <file>images/simple-light-blue-background.jpg</file>
+        <file>ElegantDark.qss</file>
+        <file>ManjaroMix.qss</file>
+        <file>MaterialDark.qss</file>
+        <file>images/camera.png</file>
+    </qresource>
+</RCC>
