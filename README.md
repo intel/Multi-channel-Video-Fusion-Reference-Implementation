@@ -3,7 +3,6 @@ This reference implementation provides high performance real-time video virtual
 It is fully accelerated with Intel QSV/OpenCL
 ![image](https://user-images.githubusercontent.com/43125192/196908078-83d0eaa2-ff19-4c08-8859-ecff66ecb7de.png)
 
-
 ## Compile: 
 To compile 
 1.	QTAV (https://github.com/wang-bin/QtAV/releases/tag/v1.13.0) 
@@ -100,3 +99,5 @@ After enabling the virtual camera AI background replacement with a green screen 
 https://github.com/wang-bin/QtAV  
 A cross-platform multimedia framework based on Qt and FFmpeg  
 Video Fusion APP integrates a media player using QtAV. 
+
+Project in maintenance
